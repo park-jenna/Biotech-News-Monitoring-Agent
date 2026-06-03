@@ -1,258 +1,396 @@
 # SPEC: Scheduled Biotech News Monitoring Agent
 
 > This spec is written in the SDD style used for AI-assisted
-> implementation. It is structured so an AI tool can implement it with
-> minimal ambiguity: explicit goal, non-goals, constraints, concrete
-> input/output examples, edge cases, and acceptance criteria.
+> implementation. It is structured so an AI tool can implement the MVP
+> with minimal ambiguity: explicit goal, non-goals, runtime commands,
+> concrete data contracts, edge cases, and acceptance criteria.
 
 ---
 
-## 1. Goal
+## 1. Goal And Demo Definition
 
-Build an autonomous agent that runs on a schedule, pulls biotech and FDA
-news from RSS feeds, uses Claude to summarize and score each article for
-relevance, stores the results, and shows them on a simple web page. The
-agent remembers what it has already processed so it never repeats work,
-and it recovers from or reports failures without a human watching.
+Build a local MVP of an autonomous agent that monitors biotech and FDA
+news from RSS feeds on a schedule, uses Claude to summarize and score
+new articles for relevance, stores results in SQLite, and shows relevant
+articles on a simple Flask web page.
 
-The agent must demonstrate, concretely, four capabilities:
-1. Runs on a schedule (no human trigger).
-2. Handles edge cases without crashing.
-3. Does not need babysitting (idempotent, self-recovering, alerts on
-   failure).
-4. Has the tooling and integrations built around it (data integration,
-   memory, scheduler, web view, failure handling).
+For the local demo, a human may start the long-running scheduler process,
+but each monitoring run after startup must be triggered by APScheduler,
+not by a human clicking a button or manually running the job.
+
+The agent must demonstrate these capabilities:
+1. Scheduled execution after process startup.
+2. RSS data integration.
+3. SQLite memory so already-seen articles are not reprocessed.
+4. Claude-based summarization and relevance scoring.
+5. Failure handling that records problems and continues when possible.
+6. A read-only web view for the latest relevant articles and run status.
 
 ---
 
-## 2. Non-goals (explicitly out of scope)
+## 2. Non-Goals
 
 - User accounts or authentication.
 - Multiple users.
-- A configuration UI. Feeds and settings live in a config file.
-- Web scraping of arbitrary pages. RSS only.
-- Cloud deployment. A local run is acceptable for the demo, with
-  production mapping documented in the README.
-- A heavy frontend. The web page is a single read-only view, no React,
-  no build step.
+- A configuration UI. Feeds and settings live in `config.py`.
+- Web scraping of arbitrary article pages.
+- Fetching full article text outside the RSS entry payload.
+- Cloud deployment. A local run is acceptable for the demo.
+- Real Slack or email alert integration. Production alert mapping is
+  documented in the README only.
+- A heavy frontend. The web page is a single read-only Flask view with
+  simple HTML/CSS, no React, and no build step.
 
-If a feature is not listed in the Goal, do not build it.
-
----
-
-## 3. Constraints
-
-- Language: Python.
-- AI: Anthropic Claude API via the official `anthropic` SDK. No other AI
-  provider.
-- Storage: SQLite, a single local file. No external database.
-- Scheduler: APScheduler for the demo. Document the cron / cloud
-  scheduler mapping in the README.
-- Web: Flask only, with simple templates or inline HTML. No frontend
-  framework.
-- Dependencies: keep minimal. Prefer the standard library where
-  reasonable. Expected third-party packages: `anthropic`, `feedparser`,
-  `flask`, `apscheduler`.
-- The API key is read from an environment variable, never hardcoded.
-- Domain logic (feeds, keywords, thresholds) lives in a config file, not
-  in code, so the agent is portable to another topic without code
-  changes.
-- I am still building fluency in Python, so the implementation should
-  include brief comments on each main component and explain any
-  non-obvious Python idioms.
+If a feature is not listed in the goal or acceptance criteria, do not
+build it for the MVP.
 
 ---
 
-## 4. Configuration (config file, not hardcoded)
+## 3. Runtime Commands And Environment Variables
 
-A `config.py` (or `config.yaml`) holding:
+The implementation must expose these local commands:
+
+- `python run_once.py`: initialize storage if needed and execute one
+  monitoring run immediately.
+- `python scheduler.py`: start APScheduler and execute monitoring runs
+  on the configured interval.
+- `python app.py`: start the Flask web app.
+
+The Anthropic API key must be read from:
+
+```text
+ANTHROPIC_API_KEY
+```
+
+The API key must never be hardcoded or committed.
+
+If `ANTHROPIC_API_KEY` is missing when a run needs Claude, the run must
+fail clearly, record the failure in `runs`, and write the global failure
+to `failures.log`.
+
+All timestamps stored by the application must be UTC ISO-8601 strings.
+
+---
+
+## 4. Configuration
+
+Use `config.py` as the only configuration file. Do not add YAML support
+for the MVP.
+
+`config.py` must define:
+
 - `RSS_FEEDS`: list of RSS feed URLs.
-- `RELEVANCE_KEYWORDS`: topics the agent cares about, e.g. AL
-  amyloidosis, CAR-T, BCMA, FDA approval, clinical trial.
-- `SCHEDULE_INTERVAL`: how often the agent runs, e.g. every 6 hours.
-- `RELEVANCE_THRESHOLD`: minimum score (0 to 100) for an article to be
-  shown as relevant.
+- `RELEVANCE_KEYWORDS`: topics the agent cares about, for example
+  `AL amyloidosis`, `CAR-T`, `BCMA`, `FDA approval`, `clinical trial`.
+- `SCHEDULE_INTERVAL_HOURS`: how often the scheduled agent runs.
+- `RELEVANCE_THRESHOLD`: minimum score from `0` to `100` for an article
+  to be shown as relevant.
+- `DATABASE_PATH`: path to the SQLite database file.
+- `FAILURE_LOG_PATH`: path to `failures.log`.
+
+Domain logic such as feeds, keywords, and thresholds must live in
+`config.py`, not be hardcoded in processing logic.
 
 ---
 
-## 5. Data model (SQLite)
+## 5. Data Model
 
-Table `articles`:
-- `id` TEXT PRIMARY KEY (a hash of the article URL, used for dedup).
+Use SQLite with a single local database file.
+
+### Table: `articles`
+
+- `id` TEXT PRIMARY KEY
 - `title` TEXT
 - `url` TEXT
-- `source` TEXT (which feed it came from)
-- `published_at` TEXT (from the feed if present)
-- `summary` TEXT (Claude-generated, null if low relevance or failed)
-- `relevance_score` INTEGER (0 to 100, Claude-generated)
-- `status` TEXT ("processed", "low_relevance", or "failed")
+- `source` TEXT
+- `published_at` TEXT
+- `content_excerpt` TEXT
+- `summary` TEXT
+- `relevance_score` INTEGER
+- `status` TEXT
+- `error` TEXT
+- `created_at` TEXT
 - `processed_at` TEXT
 
-Table `runs`:
+Allowed `articles.status` values:
+
+- `"processed"`: Claude returned valid output and
+  `relevance_score >= RELEVANCE_THRESHOLD`.
+- `"low_relevance"`: Claude returned valid output but
+  `relevance_score < RELEVANCE_THRESHOLD`; `summary` must be null.
+- `"failed"`: article-level processing failed; `error` must explain why.
+
+The `articles` table is the memory. Before processing an article, check
+whether its `id` already exists. If it exists, skip the article and do
+not call Claude again.
+
+### Table: `runs`
+
 - `id` INTEGER PRIMARY KEY AUTOINCREMENT
 - `started_at` TEXT
 - `finished_at` TEXT
 - `articles_seen` INTEGER
 - `articles_new` INTEGER
-- `status` TEXT ("success" or "failed")
-- `error` TEXT (null on success)
+- `articles_failed` INTEGER
+- `status` TEXT
+- `error` TEXT
 
-The `articles` table is the memory. Before processing an article, check
-whether its id already exists. If it does, skip it.
+Allowed `runs.status` values:
+
+- `"running"`: run row has been created and processing has started.
+- `"success"`: run completed with no feed-level, article-level, or
+  global failures.
+- `"partial_success"`: run completed, but one or more feeds or articles
+  failed.
+- `"failed"`: a global failure prevented the run from completing, for
+  example a database error or missing required API key.
 
 ---
 
-## 6. Concrete input / output example
+## 6. Article Identity And Dedup Policy
 
-This is the contract the implementation must satisfy.
+Article identity must be deterministic and stable across runs.
 
-### Input: one RSS article (as parsed from a feed)
-```
-title:       "FDA Grants Breakthrough Therapy Designation to XYZ-100 for AL Amyloidosis"
-url:         "https://example-biotech-news.com/articles/xyz-100-btd"
-source:      "FierceBiotech"
-published:   "2026-06-04T09:30:00Z"
-content:     "Biotech company XYZ today announced the FDA has granted
-              Breakthrough Therapy Designation to its lead candidate
-              XYZ-100, a BCMA-targeted CAR-T therapy for relapsed AL
-              amyloidosis... [full article text]"
-```
+Dedup rules:
 
-### Claude call: expected structured output (JSON, exactly these fields)
+1. If an RSS entry has a URL, normalize the URL and use a SHA-256 hash of
+   the normalized URL as `articles.id`.
+2. If no URL exists but the entry has a GUID/id, use a SHA-256 hash of
+   the GUID/id as `articles.id`.
+3. If neither URL nor GUID/id exists, skip the entry and log a
+   feed-level warning. Do not call Claude.
+
+Minimum URL normalization for the MVP:
+
+- Strip leading and trailing whitespace.
+- Remove URL fragments.
+- Preserve query strings.
+- Lowercase the scheme and host.
+
+If the same article appears in multiple feeds, the first seen copy is
+processed and stored. Later copies are skipped because their `id`
+already exists.
+
+Failed articles are remembered and are not retried automatically in the
+MVP. This prevents a bad article or bad model response from being retried
+forever.
+
+---
+
+## 7. RSS Input Contract
+
+The agent must use RSS entry fields only. It must not fetch or scrape
+the linked article page.
+
+For each RSS entry, extract:
+
+- `title`: entry title if present, otherwise `"(untitled)"`.
+- `url`: entry link if present.
+- `guid`: entry id/guid if present.
+- `source`: feed title if available, otherwise the feed URL.
+- `published_at`: parsed feed timestamp if available, otherwise null.
+- `content_excerpt`: text from RSS content/summary fields, truncated to
+  a reasonable length for storage and Claude input.
+
+If an entry has no useful content beyond title and URL, still process it
+with the available title and metadata.
+
+---
+
+## 8. Agent Run Flow
+
+One monitoring run must follow this flow:
+
+1. Insert a `runs` row with `started_at`, `status = "running"`, and zero
+   counts.
+2. Validate required runtime configuration, including
+   `ANTHROPIC_API_KEY`.
+3. For each feed in `RSS_FEEDS`:
+   - Fetch and parse the feed.
+   - If the feed is unreachable or malformed, log the feed failure,
+     count it as a partial failure, and continue to the next feed.
+   - For each entry, compute its article id using the dedup policy.
+   - Increment `articles_seen` for entries with enough identity data to
+     consider.
+   - If the id already exists in `articles`, skip it.
+   - If the id is new, call Claude with the article title, source,
+     published date, content excerpt, and relevance keywords.
+   - Validate Claude's JSON response.
+   - Store the article as `"processed"`, `"low_relevance"`, or
+     `"failed"`.
+4. Update the `runs` row with `finished_at`, counts, final status, and
+   error text if applicable.
+
+The run is idempotent: running it twice in a row with unchanged feeds
+must create no duplicate articles and must not call Claude for articles
+already present in SQLite.
+
+---
+
+## 9. Claude Integration And Response Validation
+
+Use the official `anthropic` Python SDK. No other AI provider is allowed.
+
+The implementation must make one Claude call per new article.
+
+The prompt must instruct Claude to return only JSON with exactly these
+fields:
+
 ```json
 {
-  "summary": "The FDA granted Breakthrough Therapy Designation to XYZ-100, a BCMA-targeted CAR-T therapy for relapsed AL amyloidosis. The designation is based on early clinical data and is intended to speed development.",
+  "summary": "2 to 3 sentence summary",
   "relevance_score": 92
 }
 ```
 
-### Stored row in `articles`
-```
-id:               "a3f9..." (sha256 of the url, truncated)
-title:            "FDA Grants Breakthrough Therapy Designation to XYZ-100 for AL Amyloidosis"
-url:              "https://example-biotech-news.com/articles/xyz-100-btd"
-source:           "FierceBiotech"
-published_at:     "2026-06-04T09:30:00Z"
-summary:          "The FDA granted Breakthrough Therapy Designation to XYZ-100..."
-relevance_score:  92
-status:           "processed"
-processed_at:     "2026-06-04T12:00:03Z"
-```
+Validation rules:
 
-### Web page row (rendered)
-```
-[92]  FDA Grants Breakthrough Therapy Designation to XYZ-100 for AL Amyloidosis
-      FierceBiotech
-      The FDA granted Breakthrough Therapy Designation to XYZ-100, a
-      BCMA-targeted CAR-T therapy for relapsed AL amyloidosis...
-```
+- The response must parse as JSON.
+- The JSON must include `summary` and `relevance_score`.
+- `summary` must be a non-empty string.
+- `relevance_score` must be an integer from `0` to `100`.
+- Extra fields may be ignored, but missing or invalid required fields
+  make the article fail.
 
-### Low-relevance example (score below threshold)
-Input: an article about an unrelated consumer-tech funding round.
-Expected: Claude returns a low `relevance_score` (e.g. 8). The row is
-stored with `status = "low_relevance"` and `summary = null`, so its id
-is remembered and never reprocessed, but it does not appear on the web
-page.
+Claude API failures must be retried up to three times with backoff
+delays of `1s`, `2s`, and `4s`. If all attempts fail, store the article
+with `status = "failed"` and an `error` message, then continue the run.
+
+Malformed or invalid Claude output is an article-level failure. Store the
+article as `"failed"`, record the error, and continue the run.
 
 ---
 
-## 7. Agent run flow (one scheduled run)
+## 10. Failure Handling And Logging
 
-1. Insert a `runs` row with `started_at` and status "running".
-2. For each feed in `RSS_FEEDS`:
-   a. Fetch and parse the feed.
-   b. For each article, compute its id (hash of url).
-   c. If the id already exists in `articles`, skip it.
-   d. If new, call Claude with the title and content; expect JSON with
-      `summary` and `relevance_score`.
-   e. If `relevance_score >= RELEVANCE_THRESHOLD`, store with
-      `status = "processed"`. Otherwise store with
-      `status = "low_relevance"` and a null summary.
-3. Update the `runs` row with `finished_at`, counts, and final status.
+The agent must not fail silently.
 
-The agent must be idempotent: running it twice in a row creates no
-duplicates and reprocesses nothing.
+Failure categories:
 
----
+- Feed failure: log the feed URL and error, continue with other feeds,
+  and finish the run as `"partial_success"` if anything else completes.
+- Article/Claude failure: store the article with `status = "failed"`,
+  record `articles.error`, increment `runs.articles_failed`, and
+  continue the run.
+- Global run failure: mark the run as `"failed"` when possible and write
+  to `failures.log`.
 
-## 8. Claude integration
+Global run failures include:
 
-- Official `anthropic` Python SDK.
-- One Claude call per new article.
-- The prompt instructs Claude to return only JSON with exactly two
-  fields: `summary` (2 to 3 sentences) and `relevance_score` (integer 0
-  to 100), scored against `RELEVANCE_KEYWORDS`.
-- Parse the JSON safely. If parsing fails, treat the article as failed:
-  store `status = "failed"`, log it, but record the id so it is not
-  retried forever.
+- Missing `ANTHROPIC_API_KEY`.
+- SQLite/database errors that prevent normal run recording or article
+  storage.
+- Unexpected top-level exceptions that stop the run.
 
----
+For the demo, global run failure alerting means:
 
-## 9. Edge cases (must handle, do not skip)
+- Write a clear error to application logs.
+- Append one line to `FAILURE_LOG_PATH`.
 
-- A feed URL is unreachable or errors: log it, continue with other
-  feeds, do not crash the run.
-- A feed returns zero new articles: a valid run, not an error.
-- The Claude API call fails (network, rate limit): retry up to 3 times
-  with backoff (1s, 2s, 4s). If it still fails, mark the article
-  "failed" and move on.
-- Claude returns malformed JSON: handle as a failed article, do not
-  crash.
-- The same article appears in two feeds: dedup by id, process once.
-- A whole run fails (e.g. database error): record `runs.status =
-  "failed"` with the error, and send a failure alert (section 10).
+Each `failures.log` line must include at least:
+
+- UTC timestamp.
+- Run id if one exists.
+- Error message.
+
+The README must document how this local failure log maps to Slack or
+email alerting in production.
 
 ---
 
-## 10. Failure alerting (no babysitting)
+## 11. Scheduler Behavior
 
-If an entire run fails, the agent must surface it, not fail silently.
-For the demo: a clearly logged error plus a written line to
-`failures.log`. The README documents how this maps to a Slack or email
-alert in production. The principle: no human is watching, so failure
-must be visible after the fact.
+Use APScheduler for the local scheduled demo.
 
----
+Scheduler requirements:
 
-## 11. Web page (Flask)
-
-A single page at `/` that:
-- Reads articles with `status = "processed"`, ordered by relevance score
-  then recency.
-- Shows each: title (linked to url), source, relevance score, summary.
-- Shows a header with the last run time and status from `runs`.
-- Handles the empty state cleanly.
-
-Simple, clean styling. No build step.
+- The scheduler interval comes from `config.py`.
+- The scheduler must trigger monitoring runs without a human manually
+  starting each run.
+- Scheduled runs must not overlap. If a run is still in progress when
+  the next interval fires, the next run must be skipped or coalesced.
+- The README must document how the APScheduler setup maps to cron or a
+  cloud scheduler in production.
 
 ---
 
-## 12. Acceptance criteria (definition of done)
+## 12. Flask Web Page
 
-- The agent runs on a schedule with no manual trigger.
-- Running it twice produces no duplicates and reprocesses nothing
-  (idempotent).
-- A failing feed or a failing Claude call does not crash the run.
-- A failed run is recorded in `runs` and surfaced via `failures.log`,
-  not silent.
-- Low-relevance articles are remembered but not shown.
-- The web page shows summarized, scored, relevant articles and the last
-  run status, and handles the empty state.
-- The README explains what it does, how to run it, the architecture, and
-  the production mapping.
-- The stored output matches the contract in section 6.
+Expose one read-only page at `/`.
+
+The page must:
+
+- Read articles with `status = "processed"`.
+- Order articles by `relevance_score` descending, then `published_at`
+  descending when available.
+- Show each article's title linked to `url`, source, relevance score,
+  summary, and published date when available.
+- Show a header with the latest run time and latest run status.
+- Render cleanly when there are no articles.
+- Render cleanly before any run exists.
+
+Simple, clean styling is enough. Do not add a frontend framework or
+build step.
 
 ---
 
-## 13. Build order (one step at a time, verify before moving on)
+## 13. Acceptance Criteria
 
-1. Config file, SQLite schema, and the dedup check.
-2. RSS fetching and parsing for one feed; print raw articles.
-3. Claude integration: summarize and score one article, structured JSON.
-4. Full run flow: fetch, dedup, process, store, record the run.
-5. Edge case handling and retries.
-6. The scheduler.
-7. The Flask web page.
-8. README and production notes.
+- `python run_once.py` initializes storage if needed and executes one
+  monitoring run.
+- `python scheduler.py` starts scheduled monitoring using APScheduler.
+- `python app.py` starts a Flask app with a working `/` page.
+- The agent runs scheduled jobs after process startup without a manual
+  trigger for each run.
+- Running the agent twice with unchanged feeds creates no duplicate
+  articles and does not call Claude for already-seen articles.
+- A failing feed does not crash the run; other feeds continue.
+- If one feed fails and another feed succeeds, the run finishes as
+  `"partial_success"`.
+- A failing Claude call is retried up to three times, then the article is
+  stored as `"failed"` and the run continues.
+- Claude malformed JSON, missing fields, wrong field types, or a
+  relevance score outside `0..100` stores the article as `"failed"` and
+  records an error.
+- Low-relevance articles are remembered with `status = "low_relevance"`
+  and are not shown on the web page.
+- Relevant articles are stored with `status = "processed"` and appear on
+  the web page.
+- Same-URL articles from multiple feeds create one article row.
+- Entries with no URL and no GUID/id are skipped and logged without
+  calling Claude.
+- Missing `ANTHROPIC_API_KEY` records a failed run and appends a line to
+  `failures.log`.
+- Global run failures are recorded in `runs` when possible and surfaced
+  via `failures.log`.
+- `failures.log` entries include timestamp, run id if available, and
+  error message.
+- Scheduled runs do not overlap.
+- The web page handles an empty database and no previous runs.
+- The web page shows summarized, scored, relevant articles and latest
+  run status.
+- The README explains what the project does, how to run each command,
+  the architecture, the config file, and the production mapping for
+  scheduler and alerts.
 
-Do not move on from a step until it works and is understood.
+---
+
+## 14. Build Order
+
+Build one step at a time and verify each step before moving on.
+
+1. `config.py`, SQLite schema, timestamp helper, and dedup id helper.
+2. Database initialization and article/run insert/update functions.
+3. RSS fetching and parsing for one feed, using RSS entry fields only.
+4. Claude integration for one article with strict JSON validation.
+5. Full `run_once.py` flow: fetch, dedup, process, store, and record run.
+6. Edge case handling: feed failures, Claude retries, malformed Claude
+   output, missing identity fields, and missing API key.
+7. `scheduler.py` with APScheduler and no overlapping runs.
+8. `app.py` Flask page with empty-state handling.
+9. README with usage, architecture, and production scheduler/alert
+   mapping.
+
+The implementation should include brief comments on each main component
+and explain non-obvious Python idioms, because the project is intended
+to support Python learning as well as demonstrate the agent.
