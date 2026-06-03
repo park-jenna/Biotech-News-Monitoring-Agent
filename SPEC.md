@@ -50,11 +50,15 @@ build it for the MVP.
 
 The implementation must expose these local commands:
 
-- `python run_once.py`: initialize storage if needed and execute one
+- `python3 run_once.py`: initialize storage if needed and execute one
   monitoring run immediately.
-- `python scheduler.py`: start APScheduler and execute monitoring runs
+- `python3 scheduler.py`: start APScheduler and execute monitoring runs
   on the configured interval.
-- `python app.py`: start the Flask web app.
+- `python3 app.py`: start the Flask web app.
+
+If the active virtual environment exposes `python`, using `python`
+instead of `python3` is also acceptable. Documentation and examples
+should use `python3` by default.
 
 The Anthropic API key must be read from:
 
@@ -82,6 +86,8 @@ for the MVP.
 - `RSS_FEEDS`: list of RSS feed URLs.
 - `RELEVANCE_KEYWORDS`: topics the agent cares about, for example
   `AL amyloidosis`, `CAR-T`, `BCMA`, `FDA approval`, `clinical trial`.
+- `CLAUDE_MODEL`: Anthropic Claude model name used for summarization and
+  scoring.
 - `SCHEDULE_INTERVAL_HOURS`: how often the scheduled agent runs.
 - `RELEVANCE_THRESHOLD`: minimum score from `0` to `100` for an article
   to be shown as relevant.
@@ -144,6 +150,10 @@ Allowed `runs.status` values:
   failed.
 - `"failed"`: a global failure prevented the run from completing, for
   example a database error or missing required API key.
+
+`articles_new` means the article id did not already exist in SQLite and
+the agent attempted to process it or stored it as an article-level
+failure. Skipped duplicates do not count as new.
 
 ---
 
@@ -230,6 +240,8 @@ already present in SQLite.
 ## 9. Claude Integration And Response Validation
 
 Use the official `anthropic` Python SDK. No other AI provider is allowed.
+The Claude model name must come from `config.CLAUDE_MODEL`, not from a
+hardcoded value inside the client module.
 
 The implementation must make one Claude call per new article.
 
@@ -309,6 +321,8 @@ Scheduler requirements:
   starting each run.
 - Scheduled runs must not overlap. If a run is still in progress when
   the next interval fires, the next run must be skipped or coalesced.
+  Use APScheduler settings equivalent to `max_instances=1` and
+  `coalesce=True`.
 - The README must document how the APScheduler setup maps to cron or a
   cloud scheduler in production.
 
@@ -336,10 +350,10 @@ build step.
 
 ## 13. Acceptance Criteria
 
-- `python run_once.py` initializes storage if needed and executes one
+- `python3 run_once.py` initializes storage if needed and executes one
   monitoring run.
-- `python scheduler.py` starts scheduled monitoring using APScheduler.
-- `python app.py` starts a Flask app with a working `/` page.
+- `python3 scheduler.py` starts scheduled monitoring using APScheduler.
+- `python3 app.py` starts a Flask app with a working `/` page.
 - The agent runs scheduled jobs after process startup without a manual
   trigger for each run.
 - Running the agent twice with unchanged feeds creates no duplicate
@@ -375,22 +389,9 @@ build step.
 
 ---
 
-## 14. Build Order
+## 14. Implementation Plan
 
-Build one step at a time and verify each step before moving on.
-
-1. `config.py`, SQLite schema, timestamp helper, and dedup id helper.
-2. Database initialization and article/run insert/update functions.
-3. RSS fetching and parsing for one feed, using RSS entry fields only.
-4. Claude integration for one article with strict JSON validation.
-5. Full `run_once.py` flow: fetch, dedup, process, store, and record run.
-6. Edge case handling: feed failures, Claude retries, malformed Claude
-   output, missing identity fields, and missing API key.
-7. `scheduler.py` with APScheduler and no overlapping runs.
-8. `app.py` Flask page with empty-state handling.
-9. README with usage, architecture, and production scheduler/alert
-   mapping.
-
-The implementation should include brief comments on each main component
-and explain non-obvious Python idioms, because the project is intended
-to support Python learning as well as demonstrate the agent.
+See `IMPLEMENTATION_PLAN.md` for the proposed file structure, build
+order, module/function breakdown, manual verification checklist, test
+plan, commands, MVP tradeoffs, out-of-scope implementation details, and
+AI coding instructions.
