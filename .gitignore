@@ -1,0 +1,7 @@
+news_agent.db
+failures.log
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+*.pyo
