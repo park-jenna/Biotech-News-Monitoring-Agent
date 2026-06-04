@@ -1,4 +1,4 @@
-# Integration tests for news_agent/agent.py (implemented in Step 6).
+# Integration tests for news_agent/agent.py (Steps 6-7).
 
 import os
 import sqlite3
@@ -20,6 +20,26 @@ def agent_env(monkeypatch):
         monkeypatch.setattr(config, "DATABASE_PATH", db_path)
         monkeypatch.setattr(config, "FAILURE_LOG_PATH", failure_log)
         monkeypatch.setattr(config, "RSS_FEEDS", ["https://example.com/feed.xml"])
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        init_db()
+        yield {"db_path": db_path, "failure_log": failure_log}
+
+
+@pytest.fixture
+def multi_feed_env(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "test.db")
+        failure_log = os.path.join(tmpdir, "failures.log")
+        monkeypatch.setattr(config, "DATABASE_PATH", db_path)
+        monkeypatch.setattr(config, "FAILURE_LOG_PATH", failure_log)
+        monkeypatch.setattr(
+            config,
+            "RSS_FEEDS",
+            [
+                "https://example.com/bad-feed.xml",
+                "https://example.com/good-feed.xml",
+            ],
+        )
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         init_db()
         yield {"db_path": db_path, "failure_log": failure_log}
@@ -157,3 +177,104 @@ def test_article_failure_is_stored_and_run_continues(agent_env, monkeypatch):
 
     assert failed[0] == "failed"
     assert "Claude unavailable" in failed[1]
+
+
+def test_bad_feed_and_good_feed_results_in_partial_success(
+    multi_feed_env, monkeypatch
+):
+    def fake_fetch_feed(feed_url):
+        if "bad-feed" in feed_url:
+            raise RuntimeError("Feed unreachable")
+        return {"feed": {"title": "Good Feed"}, "entries": []}
+
+    def fake_parse_feed(feed_url, parsed_feed):
+        return [_sample_article("from-good-feed")]
+
+    def fake_call_claude(article, keywords):
+        return ClaudeResult(summary="Summary.", relevance_score=80)
+
+    monkeypatch.setattr("news_agent.agent.fetch_feed", fake_fetch_feed)
+    monkeypatch.setattr("news_agent.agent.parse_feed", fake_parse_feed)
+    monkeypatch.setattr("news_agent.agent.call_claude", fake_call_claude)
+
+    run_monitoring_once()
+    latest = get_latest_run()
+
+    assert latest["status"] == "partial_success"
+    assert latest["articles_new"] == 1
+    assert not os.path.exists(multi_feed_env["failure_log"])
+
+
+def test_feed_failure_does_not_write_failures_log(agent_env, monkeypatch):
+    def fake_fetch_feed(feed_url):
+        raise RuntimeError("Feed unreachable")
+
+    monkeypatch.setattr("news_agent.agent.fetch_feed", fake_fetch_feed)
+
+    run_monitoring_once()
+    latest = get_latest_run()
+
+    assert latest["status"] == "partial_success"
+    assert not os.path.exists(agent_env["failure_log"])
+
+
+def test_claude_failure_after_retries_creates_failed_article(agent_env, monkeypatch):
+    def fake_fetch_feed(feed_url):
+        return {"feed": {"title": "Test Feed"}, "entries": []}
+
+    def fake_parse_feed(feed_url, parsed_feed):
+        return [_sample_article("retry-fail")]
+
+    def fake_request_claude(prompt):
+        raise RuntimeError("persistent API failure")
+
+    monkeypatch.setattr("news_agent.agent.fetch_feed", fake_fetch_feed)
+    monkeypatch.setattr("news_agent.agent.parse_feed", fake_parse_feed)
+    monkeypatch.setattr("news_agent.claude_client._request_claude", fake_request_claude)
+    monkeypatch.setattr("news_agent.claude_client.time.sleep", lambda _: None)
+
+    run_monitoring_once()
+    latest = get_latest_run()
+
+    assert latest["status"] == "partial_success"
+    assert latest["articles_failed"] == 1
+
+    conn = sqlite3.connect(agent_env["db_path"])
+    failed = conn.execute(
+        "SELECT status, error FROM articles WHERE id = 'retry-fail'"
+    ).fetchone()
+    conn.close()
+
+    assert failed[0] == "failed"
+    assert "persistent API failure" in failed[1]
+
+
+def test_database_error_during_article_storage_is_global_failure(
+    agent_env, monkeypatch
+):
+    def fake_fetch_feed(feed_url):
+        return {"feed": {"title": "Test Feed"}, "entries": []}
+
+    def fake_parse_feed(feed_url, parsed_feed):
+        return [_sample_article("db-error")]
+
+    def fake_call_claude(article, keywords):
+        return ClaudeResult(summary="Summary.", relevance_score=80)
+
+    def failing_insert(article, status, summary, relevance_score, error):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr("news_agent.agent.fetch_feed", fake_fetch_feed)
+    monkeypatch.setattr("news_agent.agent.parse_feed", fake_parse_feed)
+    monkeypatch.setattr("news_agent.agent.call_claude", fake_call_claude)
+    monkeypatch.setattr("news_agent.agent.insert_article", failing_insert)
+
+    run_id = run_monitoring_once()
+    latest = get_latest_run()
+
+    assert latest["status"] == "failed"
+    assert "database is locked" in latest["error"]
+    assert os.path.exists(agent_env["failure_log"])
+    failure_log = open(agent_env["failure_log"], encoding="utf-8").read()
+    assert f"run_id={run_id}" in failure_log
+    assert "database is locked" in failure_log

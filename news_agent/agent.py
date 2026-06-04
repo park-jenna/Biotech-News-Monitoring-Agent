@@ -68,19 +68,14 @@ def _determine_run_status(stats: RunStats) -> tuple[str, str | None]:
     return "success", None
 
 
-def _process_feed(feed_url: str, stats: RunStats) -> None:
+def _fetch_articles(feed_url: str) -> list[ArticleInput]:
     parsed = fetch_feed(feed_url)
     if getattr(parsed, "bozo", False) and not parsed.entries:
         bozo_exception = getattr(parsed, "bozo_exception", None)
         message = str(bozo_exception) if bozo_exception else "Feed parse failed"
         raise RuntimeError(message)
 
-    articles = parse_feed(feed_url, parsed)
-    for article in articles:
-        stats.articles_seen += 1
-        if article_exists(article.id):
-            continue
-        process_article(article, stats)
+    return parse_feed(feed_url, parsed)
 
 
 def run_monitoring_once() -> int:
@@ -93,10 +88,17 @@ def run_monitoring_once() -> int:
         validate_runtime_config()
         for feed_url in config.RSS_FEEDS:
             try:
-                _process_feed(feed_url, stats)
+                articles = _fetch_articles(feed_url)
             except Exception as exc:
                 stats.had_feed_failure = True
                 log_feed_warning(feed_url, str(exc))
+                continue
+
+            for article in articles:
+                stats.articles_seen += 1
+                if article_exists(article.id):
+                    continue
+                process_article(article, stats)
 
         status, error = _determine_run_status(stats)
         finish_run(run_id, stats, status, error)
