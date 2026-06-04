@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import feedparser
 
 from news_agent.models import ArticleInput
+from news_agent.logging_utils import log_feed_warning
 from news_agent.utils import make_article_id, truncate_text
 
 
@@ -86,6 +87,10 @@ def parse_feed(feed_url: str, parsed_feed) -> list[ArticleInput]:
         guid = _entry_guid(entry)
         article_id = make_article_id(url, guid)
         if article_id is None:
+            log_feed_warning(
+                feed_url,
+                f"Skipping entry without URL or GUID: {_entry_title(entry)}",
+            )
             continue
 
         articles.append(
