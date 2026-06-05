@@ -1,4 +1,4 @@
-news_agent.db
+/news_agent.db
 failures.log
 __pycache__/
 .pytest_cache/
