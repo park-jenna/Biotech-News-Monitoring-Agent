@@ -100,7 +100,10 @@ def test_index_shows_latest_run_and_processed_articles_only(app_client):
     body = response.get_data(as_text=True)
 
     assert response.status_code == 200
-    assert "status success" in body
+    assert "All feeds processed" in body
+    assert '<span class="summary-value">4</span><span class="metric-label">scanned</span>' in body
+    assert '<span class="summary-value">2</span><span class="metric-label">relevant</span>' in body
+    assert '<span class="summary-value">1</span><span class="metric-label">filtered</span>' in body
     assert "Newer High Score" in body
     assert "Older High Score" in body
     assert "Low relevance" not in body
