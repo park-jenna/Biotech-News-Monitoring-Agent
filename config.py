@@ -1,3 +1,5 @@
+import os
+
 RSS_FEEDS = [
     "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml",
     "https://www.biopharmadive.com/feeds/news/",
@@ -23,6 +25,6 @@ SCHEDULE_INTERVAL_HOURS = 1
 
 RELEVANCE_THRESHOLD = 50
 
-DATABASE_PATH = "news_agent.db"
+DATABASE_PATH = os.environ.get("DATABASE_PATH", "news_agent.db")
 
-FAILURE_LOG_PATH = "failures.log"
+FAILURE_LOG_PATH = os.environ.get("FAILURE_LOG_PATH", "failures.log")

@@ -159,6 +159,47 @@ Local APScheduler maps to:
 Use `max_instances=1` / coalescing semantics in your orchestrator so a long
 run does not overlap the next scheduled execution.
 
+## Deployment
+
+The web view can be deployed on [Render](https://render.com) as a read-only
+demo dashboard for interviews or reviewers.
+
+Build runs `pip install -r requirements.txt`. The app is served with
+gunicorn via `wsgi.py`. Render settings live in `render.yaml`; the web
+service sets `DATABASE_PATH=data/news_agent.db`.
+
+The SQLite file at `data/news_agent.db` is included in the repo so the
+deployed view shows real agent results without calling Claude on Render.
+Refresh it after local monitoring runs:
+
+```bash
+python3 run_once.py
+cp news_agent.db data/news_agent.db
+git add data/news_agent.db
+git commit -m "Update demo database snapshot"
+git push
+```
+
+Then redeploy on Render (or let auto-deploy run).
+
+The scheduler runs locally in this demo version. In production it would move
+to a cron job or a cloud scheduler (Render Cron, GitHub Actions, or AWS
+EventBridge), and the SQLite file would move to a hosted database. Failure
+logging would become a Slack or email alert.
+
+`ANTHROPIC_API_KEY` is not required on Render when you only serve the
+pre-seeded read-only page.
+
+### Render setup
+
+1. Push this repo to GitHub.
+2. In Render: **New → Blueprint** and select the repo (`render.yaml`), or
+   create a **Web Service** manually with:
+   - **Build command:** `pip install -r requirements.txt`
+   - **Start command:** `gunicorn wsgi:app --bind 0.0.0.0:$PORT`
+   - **Environment:** `DATABASE_PATH=data/news_agent.db`
+3. Open the service URL (for example `https://news-monitoring-agent.onrender.com`).
+
 ## Development Checks
 
 ```bash
@@ -171,12 +212,12 @@ python3 -m py_compile config.py run_once.py scheduler.py app.py news_agent/*.py
 - User accounts or authentication
 - Configuration UI or YAML config files
 - Web scraping of linked article pages
-- Cloud deployment artifacts
 - Real Slack or email alert sending
 - Automatic retry of failed articles
 - Admin controls for retry, delete, edit, or re-score
 - Pagination, search, or filtering on the web page
 - React or other frontend build tooling
+- Hosted database (Render demo uses committed SQLite snapshot only)
 
 See `SPEC.md` for full acceptance criteria and `IMPLEMENTATION_PLAN.md` for
 the build sequence used to implement this MVP.

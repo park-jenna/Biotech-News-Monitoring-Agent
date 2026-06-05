@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: news-monitoring-agent
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn wsgi:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: DATABASE_PATH
+        value: data/news_agent.db
+      - key: PYTHON_VERSION
+        value: 3.12.7
