@@ -4,6 +4,7 @@ RSS_FEEDS = [
     "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml",
     "https://www.biopharmadive.com/feeds/news/",
     "https://www.fiercebiotech.com/rss/news",
+    "https://clinicaltrials.gov/ct2/results/rss.xml?cond=AL+Amyloidosis",
 ]
 
 RELEVANCE_KEYWORDS = [
@@ -21,7 +22,7 @@ RELEVANCE_KEYWORDS = [
 
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
-SCHEDULE_INTERVAL_HOURS = 1
+SCHEDULE_INTERVAL_HOURS = 6
 
 RELEVANCE_THRESHOLD = 50
 
