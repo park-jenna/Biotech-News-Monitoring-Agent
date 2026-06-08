@@ -1,6 +1,9 @@
 # Entrypoint: create Flask app and render the read-only article view at /.
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+DISPLAY_TIMEZONE = ZoneInfo("America/Los_Angeles")
 
 from flask import Flask, render_template_string
 
@@ -350,12 +353,14 @@ def format_run_datetime(value: str | None) -> str:
     if parsed is None:
         return value
 
-    hour = parsed.hour % 12 or 12
-    minute = parsed.minute
-    am_pm = "AM" if parsed.hour < 12 else "PM"
+    local = parsed.astimezone(DISPLAY_TIMEZONE)
+    hour = local.hour % 12 or 12
+    minute = local.minute
+    am_pm = "AM" if local.hour < 12 else "PM"
+    tz_label = local.strftime("%Z")
     return (
-        f"{parsed.strftime('%b')} {parsed.day}, {parsed.year}, "
-        f"{hour}:{minute:02d} {am_pm} UTC"
+        f"{local.strftime('%b')} {local.day}, {local.year}, "
+        f"{hour}:{minute:02d} {am_pm} {tz_label}"
     )
 
 
@@ -367,7 +372,8 @@ def format_article_date(value: str | None) -> str:
     if parsed is None:
         return value
 
-    return f"{parsed.strftime('%b')} {parsed.day}, {parsed.year}"
+    local = parsed.astimezone(DISPLAY_TIMEZONE)
+    return f"{local.strftime('%b')} {local.day}, {local.year}"
 
 
 def _feed_counts_from_run_table(run: dict) -> tuple[int, int] | None:
